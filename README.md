@@ -4,7 +4,9 @@ An anomaly-detection and predictive-alerting platform for Kubernetes
 infrastructure, built stage by stage on top of a full DevOps toolchain
 (Docker, CI/CD, IaC, GitOps, Prometheus/Grafana).
 
-**Status: Stage 3 - the service detects anomalies, groups them into incidents, and keeps a tamper-proof audit log.**
+![CI](https://github.com/islemazz/sre-sentinel/actions/workflows/ci.yml/badge.svg)
+
+**Status: Stage 4 - containerised, with CI that tests, builds, smoke-tests and publishes the image.**
 
 ## Roadmap
 
@@ -13,11 +15,12 @@ infrastructure, built stage by stage on top of a full DevOps toolchain
 | 1 | Metric simulator with ground-truth anomaly labels, `/metrics` endpoint | Python, FastAPI, Prometheus client | done |
 | 2 | Anomaly detector + evaluation against ground truth | Python | done |
 | 3 | Incident log: group consecutive anomalies into incidents, persist them, acknowledge them, append-only audit log | SQLite | done |
-| 4 | Dockerfile, CI pipelines, quality gate | Docker, GitHub Actions, Jenkins, SonarQube | |
-| 5 | Predictive alert: forecast a breach before it happens | Python (+ scikit-learn if time allows) | |
-| 6 | Run on a real cluster, GitOps deployment | Kubernetes, ArgoCD | |
-| 7 | Real metrics + dashboards | Prometheus, Grafana | |
-| 8 | Reproducible infrastructure | Terraform, Ansible | |
+| 4 | Docker image (non-root, healthcheck), compose stack, CI that tests, builds, smoke-tests and publishes the image | Docker, GitHub Actions | done |
+| 5 | Second pipeline and code-quality gate | Jenkins, SonarQube | next |
+| 6 | Predictive alert: forecast a breach before it happens | Python (+ scikit-learn if time allows) | |
+| 7 | Run on a real cluster, GitOps deployment | Kubernetes, ArgoCD | |
+| 8 | Real metrics + dashboards | Prometheus, Grafana | |
+| 9 | Reproducible infrastructure | Terraform, Ansible | |
 
 ## How the detector works
 
@@ -62,7 +65,7 @@ The simulator injects spikes of 1-3 samples and labels them, so the detector can
 
 **First attempt, for the record:** comparing each value with the median of a long 60-sample window gave about 1,360 false alarms per 100,000 samples and F1 0.65 at best. The slow wave in the signal dragged the baseline and widened the scale. Switching to a short local baseline plus a separate robust scale fixed it.
 
-**Honest limits:** the signal is synthetic (a sine wave, noise and spikes that I designed), and the parameters were tuned on the same kind of signal. Real cluster metrics will behave differently; Stage 7 is where that gets tested.
+**Honest limits:** the signal is synthetic (a sine wave, noise and spikes that I designed), and the parameters were tuned on the same kind of signal. Real cluster metrics will behave differently; Stage 8 (real Prometheus metrics) is where that gets tested.
 
 ## Run it
 
@@ -70,7 +73,7 @@ The simulator injects spikes of 1-3 samples and labels them, so the detector can
 python -m venv .venv
 # Windows:   .venv\Scripts\activate
 # Linux/Mac: source .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt     # runtime + test dependencies
 uvicorn app.main:app --reload
 ```
 
@@ -89,6 +92,31 @@ $env:SENTINEL_INTERVAL="0.05"; uvicorn app.main:app
 # Linux/Mac
 SENTINEL_INTERVAL=0.05 uvicorn app.main:app
 ```
+
+## Run it in Docker
+
+```bash
+docker compose up --build
+# open http://localhost:8000/docs
+```
+
+What the image does (and why):
+
+- **Runtime dependencies only** (`requirements.txt`); pytest and friends live in `requirements-dev.txt`, so the image stays small.
+- **Runs as an unprivileged user** (uid 10001), not root. A compromised app then has far less power inside the container.
+- **`HEALTHCHECK`** calls `/health` with Python (the slim image has no curl); `docker ps` shows `healthy` / `unhealthy`.
+- **Incident log in a volume** (`/data`): `docker compose down` keeps your incidents, `docker compose down -v` deletes them.
+- **Compose hardening**: read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`.
+
+## Continuous integration (GitHub Actions)
+
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+1. **test** - installs dependencies, runs `pytest`, prints the detector quality table.
+2. **docker** (only if tests pass) - builds the image, starts the container, runs `scripts/smoke_test.sh` against it (health, live metric samples, incident API), and fails if the container runs as root.
+3. **publish** (only on `main`) - pushes the image to GitHub Container Registry as `ghcr.io/islemazz/sre-sentinel` (tags `latest` and the commit SHA).
+
+`scripts/smoke_test.sh` is a plain script on purpose: Stage 5's Jenkins pipeline reuses it.
 
 ## Test
 
@@ -127,4 +155,8 @@ app/evaluate.py    scores the detector against the ground truth
 app/incidents.py   incident grouping (tracker) + SQLite store and audit log
 app/main.py        FastAPI app, background loop, /metrics, incident API
 tests/             unit, API and detector-quality regression tests
+scripts/           smoke_test.sh - checks a running instance (used by CI)
+Dockerfile         the image (non-root, healthcheck)
+docker-compose.yml local stack with a data volume and hardening
+.github/workflows/ CI pipeline
 ```

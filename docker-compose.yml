@@ -1,0 +1,22 @@
+services:
+  sentinel:
+    build: .
+    image: sre-sentinel:dev
+    ports:
+      - "8000:8000"
+    environment:
+      SENTINEL_INTERVAL: "1.0"
+    volumes:
+      - sentinel-data:/data        # incident log survives `docker compose down`
+    restart: unless-stopped
+    # Hardening: the app needs none of these privileges.
+    read_only: true                # code and OS files are not writable at runtime
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  sentinel-data:
