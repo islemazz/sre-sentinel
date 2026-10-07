@@ -1,0 +1,5 @@
+fastapi==0.142.3
+uvicorn[standard]==0.54.0
+prometheus-client==0.26.0
+httpx2==2.13.1
+pytest==9.1.1
