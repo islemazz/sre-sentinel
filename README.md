@@ -18,9 +18,9 @@ infrastructure, built stage by stage on top of a full DevOps toolchain
 | 4 | Docker image (non-root, healthcheck), compose stack, CI that tests, builds, smoke-tests and publishes the image | Docker, GitHub Actions | done |
 | 5 | Second pipeline with a code-quality gate and security scans (dependencies, secrets, image) | Jenkins, SonarQube, pip-audit, gitleaks, Trivy | done |
 | 6 | Predictive alert: forecast a breach before it happens | Python | done |
-| 7 | Run on a real cluster, GitOps deployment | Kubernetes, ArgoCD | |
-| 8 | Real metrics + dashboards | Prometheus, Grafana | |
-| 9 | Reproducible infrastructure | Terraform, Ansible | |
+| 7 | Run on a real cluster, GitOps deployment: CI updates the image tag in a separate repo and ArgoCD syncs it | Kubernetes (kind), ArgoCD, Kustomize | done |
+| 8 | Real metrics, alert rules and dashboards, all deployed through Git | Prometheus, Alertmanager, Grafana (kube-prometheus-stack) | done |
+| 9 | Reproducible infrastructure: cluster and ArgoCD built by code, secrets and smoke test automated | Terraform, Ansible | done |
 
 ## How the detector works
 
@@ -228,3 +228,26 @@ Dockerfile         the image (non-root, healthcheck)
 docker-compose.yml local stack with a data volume and hardening
 .github/workflows/ CI pipeline (GitHub Actions)
 ```
+
+## Rebuild the platform from scratch
+
+Stage 9 turns the manual steps into code. Prerequisites: Docker, kind, kubectl, Terraform.
+
+```powershell
+# 1. Cluster + ArgoCD + app registration (a second cluster, sre-sentinel-tf, port 8089)
+cd infra/terraform
+terraform init
+terraform apply
+
+# 2. Secrets and smoke test, in a container (needs the cluster from step 1)
+cd ../..
+docker build -t sre-sentinel-ansible infra/ansible
+kind get kubeconfig --name sre-sentinel-tf --internal | Set-Content infra/ansible/kubeconfig
+docker run --rm --network kind -e ANSIBLE_CONFIG=/work/ansible.cfg -v "${PWD}/infra/ansible:/work" -w /work sre-sentinel-ansible ansible-playbook bootstrap.yml
+
+# 3. Tear down
+cd infra/terraform
+terraform destroy
+```
+
+Terraform drives the `kind` CLI instead of a community provider, so it runs on machines where unsigned plugins are blocked. The GitOps repo (`sre-sentinel-gitops`) stays the source of truth for everything inside the cluster.
