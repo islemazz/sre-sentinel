@@ -1,5 +1,6 @@
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app, history, process, tracker
@@ -32,7 +33,9 @@ def test_metrics_exposes_our_gauges():
         body = client.get("/metrics").text
         for name in ("sre_cpu_percent", "sre_anomaly_score", "sre_samples_total",
                      "sre_detected_anomalies_total", "sre_injected_anomalies_total",
-                     "sre_incidents_opened_total", "sre_open_incidents"):
+                     "sre_incidents_opened_total", "sre_open_incidents",
+                     "sre_memory_percent", "sre_memory_breach_predicted",
+                     "sre_memory_breach_eta_seconds"):
             assert name in body
 
 
@@ -86,3 +89,17 @@ def test_ack_flow_and_error_codes():
     events = [e["event"] for e in client.get(f"/api/incidents/{incident_id}").json()["audit"]]
     assert events == ["opened", "closed", "acknowledged"]
     assert client.get("/api/audit?limit=3").json()[0]["event"] == "acknowledged"
+
+
+def test_forecast_endpoint_reports_memory_state():
+    from app.main import forecaster, process_memory
+    from app.simulator import Sample
+
+    for i in range(60):                 # feed a clear upward trend: 40 -> 69.5 %
+        process_memory(Sample(ts=float(i), value=40.0 + 0.5 * i, anomaly=False))
+    client = TestClient(app)    # no `with`: the background loop must not run
+    data = client.get("/api/forecast").json()
+    assert data["limit_percent"] == forecaster.limit
+    assert data["alert"] is True
+    assert data["eta_seconds"] is not None
+    assert data["slope_per_sample"] == pytest.approx(0.5, abs=0.01)

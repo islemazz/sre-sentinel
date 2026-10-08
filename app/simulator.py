@@ -59,3 +59,29 @@ class MetricSimulator:
 
         self._i += 1
         return Sample(ts=self._clock(), value=min(100.0, max(0.0, value)), anomaly=is_anomaly)
+
+
+class LeakSimulator:
+    """Memory that grows steadily, like a leak, until the process is restarted.
+
+    Used to test the predictive alert: the ground truth is known (the value
+    crosses `limit` at a known moment), so we can measure how many samples
+    BEFORE that moment the forecaster warned us.
+    """
+
+    def __init__(self, seed=None, start=40.0, rate=0.1, noise=1.0,
+                 restart_at=97.0, clock=time.time):
+        self._rng = random.Random(seed)
+        self.start = start
+        self.rate = rate                # percent added per sample
+        self.noise = noise
+        self.restart_at = restart_at    # the "OOM kill + restart" point
+        self._clock = clock
+        self._level = start
+
+    def next(self) -> Sample:
+        self._level += self.rate
+        if self._level >= self.restart_at:
+            self._level = self.start    # process restarted: memory is released
+        value = self._level + self._rng.gauss(0, self.noise)
+        return Sample(ts=self._clock(), value=min(100.0, max(0.0, value)), anomaly=False)

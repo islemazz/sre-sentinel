@@ -21,8 +21,9 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_late
 from pydantic import BaseModel, Field
 
 from .detector import Detection, LocalResidualDetector
+from .forecast import Forecast, TrendForecaster
 from .incidents import IncidentStore, IncidentTracker
-from .simulator import MetricSimulator, Sample
+from .simulator import LeakSimulator, MetricSimulator, Sample
 
 INTERVAL = float(os.getenv("SENTINEL_INTERVAL", "1.0"))   # seconds between samples
 HISTORY = int(os.getenv("SENTINEL_HISTORY", "300"))       # samples kept in memory
@@ -33,7 +34,10 @@ simulator = MetricSimulator(seed=int(_seed) if _seed else None)
 detector = LocalResidualDetector()
 store = IncidentStore(DB_PATH)
 tracker = IncidentTracker(store)
-
+memory_simulator = LeakSimulator(seed=int(_seed) if _seed else None)
+forecaster = TrendForecaster()   # limit 90 %, warns when the breach is < 120 samples away
+latest_forecast = Forecast(0.0, 0.0, None, False)
+latest_memory = 0.0
 
 @dataclass(frozen=True)
 class Point:
@@ -50,6 +54,9 @@ open_gauge = Gauge("sre_open_incidents", "Incidents currently open (0 or 1)")
 samples_total = Counter("sre_samples_total", "Samples produced since start")
 detected_total = Counter("sre_detected_anomalies_total", "Samples flagged as anomalous by the detector")
 incidents_total = Counter("sre_incidents_opened_total", "Incidents opened since start")
+memory_gauge = Gauge("sre_memory_percent", "Simulated memory utilisation (%)")
+memory_alert_gauge = Gauge("sre_memory_breach_predicted", "1 while memory is predicted to reach its limit soon, else 0")
+memory_eta_gauge = Gauge("sre_memory_breach_eta_seconds", "Predicted seconds until memory reaches its limit (-1 = no breach predicted)")
 injected_total = Counter(
     "sre_injected_anomalies_total",
     "Anomalous samples injected by the simulator (ground truth, for evaluating the detector)",
@@ -76,11 +83,24 @@ def process(sample: Sample) -> Point:
     return point
 
 
+def process_memory(sample: Sample) -> Forecast:
+    """Forecast memory exhaustion from the latest memory sample."""
+    global latest_forecast, latest_memory
+    latest_forecast = forecaster.update(sample.value)
+    latest_memory = sample.value
+    memory_gauge.set(sample.value)
+    memory_alert_gauge.set(1 if latest_forecast.alert else 0)
+    eta = latest_forecast.eta
+    memory_eta_gauge.set(-1 if eta is None else eta * INTERVAL)
+    return latest_forecast
+
+
 async def sampling_loop():
     while True:
         process(simulator.next())
+        process_memory(memory_simulator.next())
         await asyncio.sleep(INTERVAL)
-
+        
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -91,7 +111,7 @@ async def lifespan(app: FastAPI):
         await task
 
 
-app = FastAPI(title="SRE Sentinel", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="SRE Sentinel", version="0.4.0", lifespan=lifespan)
 
 
 class AckRequest(BaseModel):
@@ -121,6 +141,17 @@ def latest(n: int = Query(60, ge=1, le=HISTORY)):
         for p in list(history)[-n:]
     ]
 
+@app.get("/api/forecast")
+def forecast():
+    f = latest_forecast
+    return {
+        "memory_percent": round(latest_memory, 2),
+        "limit_percent": forecaster.limit,
+        "slope_per_sample": round(f.slope, 4),
+        "fit_r2": round(f.r2, 3),
+        "eta_seconds": None if f.eta is None else round(f.eta * INTERVAL, 1),
+        "alert": f.alert,
+    }
 
 @app.get("/api/incidents")
 def list_incidents(limit: int = Query(20, ge=1, le=200)):
