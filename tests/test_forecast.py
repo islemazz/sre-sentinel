@@ -72,7 +72,8 @@ def test_leak_is_predicted_well_before_the_breach():
             if r.alert and first_alert is None:
                 first_alert = i
             if value >= 90.0:
-                assert first_alert is not None and first_alert < i, "breach was not predicted"
+                assert first_alert is not None, "breach was not predicted"
+                assert first_alert < i, "alert came too late"
                 lead_times.append(i - first_alert)
                 break
     assert min(lead_times) >= 60        # at least 60 samples of warning, every time
