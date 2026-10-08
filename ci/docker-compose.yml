@@ -2,17 +2,35 @@ name: sre-sentinel-ci          # own project name, so it can never clash with ot
 
 services:
   jenkins:
-    image: jenkins/jenkins:lts-jdk21
+    build:
+      context: .
+      dockerfile: Dockerfile.jenkins     # Jenkins + Python + Docker client
+    image: sre-sentinel-jenkins:local
     ports:
-      - "9080:8080"            # Windows port 9080 -> Jenkins inside the container
+      - "127.0.0.1:9080:8080"            # reachable from this PC only
+    environment:
+      DOCKER_HOST: tcp://docker:2375     # Jenkins' docker commands go to the "docker" service below
     volumes:
-      - jenkins-home:/var/jenkins_home    # jobs and settings survive restarts
+      - jenkins-home:/var/jenkins_home
+    depends_on:
+      - docker
+    restart: unless-stopped
+
+  # A private Docker engine just for this pipeline (Docker-in-Docker).
+  # It cannot see or touch any other container on your machine.
+  docker:
+    image: docker:dind
+    privileged: true                     # required for an engine inside a container
+    environment:
+      DOCKER_TLS_CERTDIR: ""             # lab only: plain TCP, reachable only inside this compose network
+    volumes:
+      - dind-data:/var/lib/docker
     restart: unless-stopped
 
   sonarqube:
     image: sonarqube:community
     ports:
-      - "9001:9000"            # Windows port 9001 -> SonarQube inside the container
+      - "127.0.0.1:9001:9000"            # reachable from this PC only
     environment:
       # Local lab only: skips Elasticsearch's strict host-kernel checks
       SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
@@ -24,6 +42,7 @@ services:
 
 volumes:
   jenkins-home:
+  dind-data:
   sonarqube-data:
   sonarqube-logs:
   sonarqube-extensions:
