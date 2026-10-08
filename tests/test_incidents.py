@@ -26,7 +26,8 @@ def store():
 def test_consecutive_flags_become_one_incident(store):
     tracker = IncidentTracker(store, close_after=3)
     events = feed(tracker, "..xxx...")
-    assert events.count("opened") == 1 and events.count("closed") == 1
+    assert events.count("opened") == 1
+    assert events.count("closed") == 1
     incidents = store.recent()
     assert len(incidents) == 1
     inc = incidents[0]
@@ -50,7 +51,9 @@ def test_peak_tracks_the_largest_score(store):
     tracker.observe(1, 95.0, Detection(True, 11.0, 50.0))
     tracker.observe(2, 65.0, Detection(True, 3.6, 50.0))
     inc = store.recent()[0]
-    assert inc["peak_value"] == 95.0 and inc["peak_score"] == 11.0 and inc["direction"] == "up"
+    assert inc["peak_value"] == 95.0
+    assert inc["peak_score"] == 11.0
+    assert inc["direction"] == "up"
 
 
 def test_downward_anomaly_has_direction_down(store):
@@ -95,4 +98,5 @@ def test_incident_left_open_by_a_previous_run_is_closed_on_restart(tmp_path):
     second = IncidentStore(path)               # "service restarted"
     assert second.get(incident_id)["status"] == "closed"
     last = second.audit(incident_id=incident_id)[-1]
-    assert last["event"] == "closed" and "restart" in last["detail"]
+    assert last["event"] == "closed"
+    assert "restart" in last["detail"]

@@ -61,7 +61,8 @@ def test_incident_appears_in_api_with_audit_trail():
     make_incident()
     client = TestClient(app)
     newest = client.get("/api/incidents?limit=1").json()[0]
-    assert newest["status"] == "closed" and newest["direction"] == "up"
+    assert newest["status"] == "closed"
+    assert newest["direction"] == "up"
     assert newest["peak_value"] == 95.0
 
     detail = client.get(f"/api/incidents/{newest['id']}").json()
@@ -74,7 +75,8 @@ def test_ack_flow_and_error_codes():
     incident_id = client.get("/api/incidents?limit=1").json()[0]["id"]
 
     r = client.post(f"/api/incidents/{incident_id}/ack", json={"note": "planned load test"})
-    assert r.status_code == 200 and r.json()["ack_note"] == "planned load test"
+    assert r.status_code == 200
+    assert r.json()["ack_note"] == "planned load test"
 
     assert client.post(f"/api/incidents/{incident_id}/ack", json={"note": "again"}).status_code == 409
     assert client.post("/api/incidents/999999/ack", json={"note": "x"}).status_code == 404

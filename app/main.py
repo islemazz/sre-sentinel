@@ -127,16 +127,24 @@ def list_incidents(limit: int = Query(20, ge=1, le=200)):
     return store.recent(limit)
 
 
-@app.get("/api/incidents/{incident_id}")
+@app.get(
+    "/api/incidents/{incident_id}",
+    responses={404: {"description": "Incident not found"}},
+)
 def get_incident(incident_id: int):
     incident = store.get(incident_id)
     if incident is None:
         raise HTTPException(status_code=404, detail="incident not found")
     return {**incident, "audit": store.audit(incident_id=incident_id)}
 
-
-@app.post("/api/incidents/{incident_id}/ack")
-def ack_incident(incident_id: int, body: AckRequest):
+@app.post(
+    "/api/incidents/{incident_id}/ack",
+    responses={
+        404: {"description": "Incident not found"},
+        409: {"description": "Incident already acknowledged"},
+    },
+)
+def ack_incident(incident_id: int, body: AckRequest):    
     result = store.ack(incident_id, body.note, time.time())
     if result == "not_found":
         raise HTTPException(status_code=404, detail="incident not found")

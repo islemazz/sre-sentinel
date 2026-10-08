@@ -26,14 +26,16 @@ def test_flags_an_upward_spike():
     det = LocalResidualDetector()
     feed(det, noisy_flat(150))
     r = det.update(50.0 + 40.0)
-    assert r.is_anomaly and r.score > 0
+    assert r.is_anomaly
+    assert r.score > 0
 
 
 def test_flags_a_downward_drop_with_negative_score():
     det = LocalResidualDetector()
     feed(det, noisy_flat(150))
     r = det.update(50.0 - 40.0)
-    assert r.is_anomaly and r.score < 0
+    assert r.is_anomaly
+    assert r.score < 0
 
 
 def test_quiet_on_normal_noise():
