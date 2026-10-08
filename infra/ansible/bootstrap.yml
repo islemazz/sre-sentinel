@@ -1,0 +1,75 @@
+- name: Bootstrap and verify the SRE Sentinel platform
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kubeconfig: /work/kubeconfig
+    metrics_url: http://sre-sentinel-tf-control-plane:30080/metrics
+
+  tasks:
+    - name: Wait until the ArgoCD application is Synced and Healthy
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: argocd
+        name: sentinel
+      register: app
+      until: >-
+        app.resources | length > 0
+        and (app.resources[0].status.sync.status | default('')) == 'Synced'
+        and (app.resources[0].status.health.status | default('')) == 'Healthy'
+      retries: 60
+      delay: 10
+
+    - name: Make sure the monitoring namespace exists
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: monitoring
+
+    - name: Look for an existing Grafana admin secret
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        namespace: monitoring
+        name: grafana-admin
+      register: grafana_secret
+
+    - name: Create the Grafana admin secret with a random password (only if missing)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: grafana-admin
+            namespace: monitoring
+          type: Opaque
+          stringData:
+            admin-user: admin
+            admin-password: "{{ lookup('ansible.builtin.password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+      when: grafana_secret.resources | length == 0
+      no_log: true
+
+    - name: Smoke test, call the app metrics endpoint
+      ansible.builtin.uri:
+        url: "{{ metrics_url }}"
+        return_content: true
+      register: metrics
+      until: metrics.status == 200
+      retries: 12
+      delay: 5
+
+    - name: Check the expected metrics are exposed
+      ansible.builtin.assert:
+        that:
+          - "'sre_memory_percent' in metrics.content"
+          - "'sre_anomaly_score' in metrics.content"
+          - "'sre_open_incidents' in metrics.content"
+        success_msg: "App is up and exposes its SRE metrics"
