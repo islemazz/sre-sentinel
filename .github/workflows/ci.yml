@@ -93,3 +93,24 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+
+
+  deploy-gitops:
+    needs: docker
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Point the GitOps repo at the new image
+        env:
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="sha-${GITHUB_SHA::7}"
+          git clone "https://x-access-token:${GITOPS_TOKEN}@github.com/islemazz/sre-sentinel-gitops.git" gitops
+          cd gitops
+          sed -i "s/newTag: .*/newTag: ${TAG}/" apps/sentinel/kustomization.yaml
+          git config user.name "sre-sentinel-ci"
+          git config user.email "ci@users.noreply.github.com"
+          git diff --quiet || { git commit -am "Deploy sre-sentinel ${TAG}"; git push; }
