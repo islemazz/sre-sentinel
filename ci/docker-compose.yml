@@ -1,0 +1,29 @@
+name: sre-sentinel-ci          # own project name, so it can never clash with other stacks
+
+services:
+  jenkins:
+    image: jenkins/jenkins:lts-jdk21
+    ports:
+      - "9080:8080"            # Windows port 9080 -> Jenkins inside the container
+    volumes:
+      - jenkins-home:/var/jenkins_home    # jobs and settings survive restarts
+    restart: unless-stopped
+
+  sonarqube:
+    image: sonarqube:community
+    ports:
+      - "9001:9000"            # Windows port 9001 -> SonarQube inside the container
+    environment:
+      # Local lab only: skips Elasticsearch's strict host-kernel checks
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    volumes:
+      - sonarqube-data:/opt/sonarqube/data
+      - sonarqube-logs:/opt/sonarqube/logs
+      - sonarqube-extensions:/opt/sonarqube/extensions
+    restart: unless-stopped
+
+volumes:
+  jenkins-home:
+  sonarqube-data:
+  sonarqube-logs:
+  sonarqube-extensions:
