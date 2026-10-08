@@ -6,7 +6,7 @@ infrastructure, built stage by stage on top of a full DevOps toolchain
 
 ![CI](https://github.com/islemazz/sre-sentinel/actions/workflows/ci.yml/badge.svg)
 
-**Status: Stage 4 - containerised, with CI that tests, builds, smoke-tests and publishes the image.**
+**Status: Stage 6 - predictive alert on top of a security-gated Jenkins pipeline with SonarQube.**
 
 ## Roadmap
 
@@ -16,8 +16,8 @@ infrastructure, built stage by stage on top of a full DevOps toolchain
 | 2 | Anomaly detector + evaluation against ground truth | Python | done |
 | 3 | Incident log: group consecutive anomalies into incidents, persist them, acknowledge them, append-only audit log | SQLite | done |
 | 4 | Docker image (non-root, healthcheck), compose stack, CI that tests, builds, smoke-tests and publishes the image | Docker, GitHub Actions | done |
-| 5 | Second pipeline and code-quality gate | Jenkins, SonarQube | next |
-| 6 | Predictive alert: forecast a breach before it happens | Python (+ scikit-learn if time allows) | |
+| 5 | Second pipeline with a code-quality gate and security scans (dependencies, secrets, image) | Jenkins, SonarQube, pip-audit, gitleaks, Trivy | done |
+| 6 | Predictive alert: forecast a breach before it happens | Python | done |
 | 7 | Run on a real cluster, GitOps deployment | Kubernetes, ArgoCD | |
 | 8 | Real metrics + dashboards | Prometheus, Grafana | |
 | 9 | Reproducible infrastructure | Terraform, Ansible | |
@@ -48,6 +48,35 @@ A spike lasts 1-3 samples; paging someone three times for one spike is noise. So
 | `GET /api/audit?limit=50` | latest audit entries across all incidents |
 
 The easiest way to try the POST is the interactive docs at http://localhost:8000/docs.
+
+## Predictive alert (will memory run out?)
+
+The detector answers "is something wrong right now?". The forecaster answers a different question: **"if nothing changes, when will it go wrong?"** It watches a memory metric that slowly grows, like a leak, and warns before the limit is reached.
+
+How it works (`app/forecast.py`):
+
+1. Fit a straight line through the last 60 samples (least squares).
+2. If the line goes up, extend it to the limit (90 %) to get the **ETA**: `eta = (limit - value_on_the_line_now) / slope`.
+3. Raise the alert only if **all three** hold: the slope is meaningful (`>= 0.02` per sample), the line really explains the data (`r2 >= 0.5`, so noise does not trigger it), and the ETA is inside the horizon (120 samples).
+
+Why a line and not machine learning? There is nothing to train on, it runs in microseconds, and an alert can be explained exactly. A model would only be worth it for signals a line cannot describe.
+
+Measured on the leak simulator (ground truth: the memory crosses 90 % at a known moment):
+
+| Check | Result |
+| --- | --- |
+| Leaks caught before the limit | 100 / 100 cycles |
+| Warning time | 88 to 145 samples before the limit (median 111) |
+| False alerts far from the limit | 0 in 60,000 samples |
+| False alerts on a flat noisy signal | 0 in 100,000 samples |
+
+**Honest limit:** on the CPU wave (a daily sine pattern) a straight line cannot tell a normal rise from a leak, and it raised false alerts in 17 % of samples. So the forecaster is only applied to the memory metric, not to CPU.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/forecast` | memory %, fitted slope, fit quality (`fit_r2`), seconds until the limit (`eta_seconds`, `null` if none) and `alert` |
+
+It also exports `sre_memory_percent`, `sre_memory_breach_predicted` and `sre_memory_breach_eta_seconds` for Prometheus (Stage 8).
 
 ## How well does it work?
 
@@ -82,6 +111,7 @@ Then open:
 - http://localhost:8000/health
 - http://localhost:8000/metrics - Prometheus text format
 - http://localhost:8000/api/latest - last samples as JSON: `injected` is the ground truth, `detected` is the detector's decision, `score` is its robust z-score
+- http://localhost:8000/api/forecast - memory trend and predicted time until the limit
 - http://localhost:8000/docs - auto-generated API docs
 
 To watch detection happen quickly (about one spike every few seconds):
@@ -116,7 +146,39 @@ What the image does (and why):
 2. **docker** (only if tests pass) - builds the image, starts the container, runs `scripts/smoke_test.sh` against it (health, live metric samples, incident API), and fails if the container runs as root.
 3. **publish** (only on `main`) - pushes the image to GitHub Container Registry as `ghcr.io/islemazz/sre-sentinel` (tags `latest` and the commit SHA).
 
-`scripts/smoke_test.sh` is a plain script on purpose: Stage 5's Jenkins pipeline reuses it.
+`scripts/smoke_test.sh` is a plain script on purpose: the Jenkins pipeline (below) reuses it.
+
+## Second pipeline (Jenkins + SonarQube, DevSecOps)
+
+`Jenkinsfile` is the pipeline as code. It runs on a Jenkins that I host myself with `ci/docker-compose.yml`:
+
+```bash
+cd ci
+docker compose -p sre-sentinel-ci up -d --build
+# Jenkins:   http://localhost:9080
+# SonarQube: http://localhost:9001
+```
+
+Stages, in order. Any failing stage stops the pipeline:
+
+1. **Test** - pytest with coverage (`coverage.xml`) and a JUnit report.
+2. **Dependency audit** - `pip-audit` checks `requirements.txt` against known vulnerabilities.
+3. **Secret scan** - `gitleaks` scans the whole git history. The binary is downloaded with a pinned version and its SHA-256 checksum is verified.
+4. **SonarQube analysis + Quality Gate** - the build waits for SonarQube's verdict (no new issues, coverage and duplication on new code) and fails if the gate fails.
+5. **Build image** - `docker build`.
+6. **Image scan** - Trivy reports HIGH and CRITICAL findings and **fails the build on any fixable CRITICAL**.
+7. **Smoke test** - the built image runs read-only with all capabilities dropped; `scripts/smoke_test.sh` checks it, and the build fails if the container runs as root.
+
+Security choices (and why):
+
+- **Private Docker engine** (`docker:dind`): Jenkins builds and runs containers in its own engine, so a pipeline can never see or touch other containers on the same machine. The engine's port is only reachable inside the compose network.
+- **Ports bound to `127.0.0.1`**: Jenkins and SonarQube are reachable only from this computer.
+- **No secrets in the repository**: the SonarQube token lives in Jenkins credentials and is injected only during the analysis.
+- **A security check that cannot run fails the build** instead of passing silently (for example, when the vulnerability database cannot be downloaded).
+
+What the pipeline caught while I built this: a SonarQube Quality Gate failure on my own new test code (a composite assertion), which blocked the build until I fixed it; and a Trivy run that failed because the vulnerability database download timed out, which is the intended behaviour for a scan that cannot run.
+
+Known limits, on purpose: the Jenkins is local, so GitHub cannot trigger it with a webhook and builds are started by hand. SonarQube Community uses its embedded database (evaluation only) and does not scan for injection flaws such as SQL injection or XSS, which is why the other layers (dependencies, secrets, image) exist.
 
 ## Test
 
@@ -145,18 +207,24 @@ python -m app.evaluate
 | `sre_samples_total` | counter | samples produced |
 | `sre_detected_anomalies_total` | counter | samples the detector flagged |
 | `sre_injected_anomalies_total` | counter | samples the simulator made anomalous (ground truth) |
+| `sre_memory_percent` | gauge | simulated memory utilisation |
+| `sre_memory_breach_predicted` | gauge | 1 while memory is predicted to reach its limit soon, else 0 |
+| `sre_memory_breach_eta_seconds` | gauge | predicted seconds until the limit (-1 = no breach predicted) |
 
 ## Layout
 
 ```
-app/simulator.py   synthetic CPU signal + injected spikes (ground truth)
+app/simulator.py   synthetic CPU signal + injected spikes, and a memory leak signal
 app/detector.py    streaming detector (local baseline + robust residual score)
+app/forecast.py    predictive alert: linear trend forecast of the time to a limit
 app/evaluate.py    scores the detector against the ground truth
 app/incidents.py   incident grouping (tracker) + SQLite store and audit log
 app/main.py        FastAPI app, background loop, /metrics, incident API
 tests/             unit, API and detector-quality regression tests
 scripts/           smoke_test.sh - checks a running instance (used by CI)
+Jenkinsfile        the Jenkins pipeline (test, audits, SonarQube, scans, smoke test)
+ci/                Jenkins image + compose stack (Jenkins, SonarQube, private Docker engine)
 Dockerfile         the image (non-root, healthcheck)
 docker-compose.yml local stack with a data volume and hardening
-.github/workflows/ CI pipeline
+.github/workflows/ CI pipeline (GitHub Actions)
 ```
