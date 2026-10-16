@@ -1,4 +1,4 @@
-﻿# SRE Sentinel
+# SRE Sentinel
 
 An anomaly-detection and predictive-alerting platform for Kubernetes
 infrastructure, built stage by stage on top of a full DevOps toolchain
