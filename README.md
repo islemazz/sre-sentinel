@@ -251,3 +251,24 @@ terraform destroy
 ```
 
 Terraform drives the `kind` CLI instead of a community provider, so it runs on machines where unsigned plugins are blocked. The GitOps repo (`sre-sentinel-gitops`) stays the source of truth for everything inside the cluster.
+## Statistical vs machine-learning detector
+
+Question: does a machine-learning model beat the robust z-score detector? Both ran on the same simulated streams (20 held-out seeds x 5000 samples, spikes of 10, 15, 20 and 35 CPU points).
+
+| Spike | Detector | Precision | Recall | F1 | False alarms |
+| --- | --- | --- | --- | --- | --- |
+| 10 | z-score | 98.03% | 37.83% | 0.55 | 15 |
+| 10 | Isolation Forest | 75.66% | 42.09% | 0.54 | 267 |
+| 15 | z-score | 98.09% | 85.80% | 0.92 | 33 |
+| 15 | Isolation Forest | 85.98% | 89.25% | 0.88 | 287 |
+| 20 | z-score | 97.59% | 98.43% | 0.98 | 48 |
+| 20 | Isolation Forest | 87.02% | 99.24% | 0.93 | 292 |
+| 35 | z-score | 97.41% | 99.24% | 0.98 | 52 |
+| 35 | Isolation Forest | 87.07% | 99.70% | 0.93 | 292 |
+
+Result: the statistical detector wins on F1. The Isolation Forest catches about as many spikes but raises roughly six times more false alarms. The simulated signal (slow wave + noise + spikes) is exactly what a robust z-score is built for, and it re-estimates "normal" continuously, while the forest learns one fixed notion of normal during training. Small spikes (10 points) are hard for both. Real, messier metrics may favour ML, which is the next step.
+
+Fairness: the forest was trained without labels on separate seeds (1-10), and its settings were chosen on validation seeds (20-29), never on the held-out seeds used above. It lives in `experiments/`, outside the app package, and its libraries are in `requirements-ml.txt`, not in the runtime requirements.
+
+    pip install -r requirements-ml.txt
+    python -m experiments.evaluate_ml
