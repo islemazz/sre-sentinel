@@ -1,4 +1,4 @@
-# SRE Sentinel
+﻿# SRE Sentinel
 
 An anomaly-detection and predictive-alerting platform for Kubernetes
 infrastructure, built stage by stage on top of a full DevOps toolchain
@@ -6,7 +6,7 @@ infrastructure, built stage by stage on top of a full DevOps toolchain
 
 ![CI](https://github.com/islemazz/sre-sentinel/actions/workflows/ci.yml/badge.svg)
 
-**Status: Stage 6 - predictive alert on top of a security-gated Jenkins pipeline with SonarQube.**
+**Status: all 9 stages done - simulator, detector, incident log, CI/CD, security pipeline, predictive alert, GitOps on Kubernetes, monitoring and Infrastructure as Code.**
 
 ## Roadmap
 
