@@ -111,6 +111,6 @@ jobs:
           git clone "https://x-access-token:${GITOPS_TOKEN}@github.com/islemazz/sre-sentinel-gitops.git" gitops
           cd gitops
           sed -i "s/newTag: .*/newTag: ${TAG}/" apps/sentinel/kustomization.yaml
-          git config user.name "sre-sentinel-ci"
-          git config user.email "ci@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git diff --quiet || { git commit -am "Deploy sre-sentinel ${TAG}"; git push; }
